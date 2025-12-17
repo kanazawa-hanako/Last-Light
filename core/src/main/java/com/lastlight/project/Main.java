@@ -7,6 +7,7 @@ import com.badlogic.gdx.Gdx;
 import com.badlogic.gdx.Input;
 import com.badlogic.gdx.audio.Sound;
 import com.badlogic.gdx.graphics.GL20;
+import com.badlogic.gdx.graphics.Color;
 import com.badlogic.gdx.graphics.OrthographicCamera;
 import com.badlogic.gdx.graphics.Pixmap;
 import com.badlogic.gdx.graphics.Texture;
@@ -16,6 +17,8 @@ import com.badlogic.gdx.graphics.g2d.SpriteBatch;
 import com.badlogic.gdx.graphics.glutils.ShapeRenderer;
 import com.badlogic.gdx.math.MathUtils;
 import com.badlogic.gdx.math.Vector2;
+import com.badlogic.gdx.Preferences;
+import com.badlogic.gdx.utils.Align;
 
 public class Main extends ApplicationAdapter {
 
@@ -76,6 +79,20 @@ public class Main extends ApplicationAdapter {
     // GAME STATE
     // ======================
     private BitmapFont font;
+    // Main menu state
+    private boolean showMenu = true;
+    private int menuIndex = 0;
+    private String[] menuOptions;
+    private Preferences prefs;
+    private boolean hasSavedGame = false;
+    private enum MenuView {MAIN, HOWTO, SETTINGS}
+    private MenuView menuView = MenuView.MAIN;
+    // Settings
+    private int settingsIndex = 0;
+    private String[] settingsOptions;
+    private float masterVolume = 1f;
+    private boolean sfxEnabled = true;
+    private boolean fullscreen = false;
     private boolean gameWon = false;
     private boolean gameOver = false;
     private float victoryTimer = 0f;
@@ -129,17 +146,35 @@ public class Main extends ApplicationAdapter {
 
         font = new BitmapFont();
         font.setColor(1, 1, 0, 1);
-
         loadTextures();
         loadSounds();
         lightMask = createRadialLightMask(8192, minLightRadius);
 
+        // Preferences for save/continue and settings
+        prefs = Gdx.app.getPreferences("lastlight_prefs");
+        hasSavedGame = prefs.getBoolean("hasSave", false);
+
+        // Load persisted settings
+        masterVolume = prefs.getFloat("masterVolume", 1f);
+        sfxEnabled = prefs.getBoolean("sfxEnabled", true);
+        fullscreen = prefs.getBoolean("fullscreen", false);
+
+        // Build menu options (Continue will be gray if no save exists)
+        menuOptions = new String[]{"Start Game", "Continue", "How to Play", "Settings", "Quit"};
+        settingsOptions = new String[]{"Master Volume", "SFX Enabled", "Fullscreen"};
+    }
+
+    // Called when starting or continuing the game to initialize entities and game state
+    private void startGame(boolean continueSaved) {
+        // If resuming from a save, future work: load state from prefs.
         spawnEntities();
         totalGenerators = generators.size();
 
         // Add doors manually (or via map if needed)
         doors.add(new Door(new Vector2(tileSize, (map.length - 2) * tileSize), doorClosedTexture, doorOpenTexture, tileSize));
         doors.add(new Door(new Vector2(18 * tileSize, tileSize), doorClosedTexture, doorOpenTexture, tileSize));
+
+        showMenu = false;
     }
 
     private void loadTextures() {
@@ -170,6 +205,12 @@ public class Main extends ApplicationAdapter {
     @Override
     public void render() {
         float delta = Gdx.graphics.getDeltaTime();
+        // If menu is active, render menu and handle its input
+        if (showMenu) {
+            renderMenu();
+            handleMenuInput();
+            return;
+        }
 
         if (!gameOver && !gameWon) {
             player.update(delta, map, generators, doors);
@@ -193,6 +234,212 @@ public class Main extends ApplicationAdapter {
         renderProgressBars();
         renderHUD();
         renderEndScreens(delta);
+    }
+
+    // ======================
+    // MENU
+    // ======================
+    private void renderMenu() {
+        Gdx.gl.glClearColor(0, 0, 0, 1);
+        Gdx.gl.glClear(GL20.GL_COLOR_BUFFER_BIT);
+
+        batch.setProjectionMatrix(hudCamera.combined);
+        batch.begin();
+
+        // Title
+        font.getData().setScale(2.0f);
+        font.setColor(Color.WHITE);
+        GlyphLayout titleLayout = new GlyphLayout(font, "LAST LIGHT");
+        font.draw(batch, titleLayout, (Gdx.graphics.getWidth() - titleLayout.width) / 2f, Gdx.graphics.getHeight() - 80);
+
+        // Smaller font for options
+        font.getData().setScale(1.0f);
+
+        if (menuView == MenuView.MAIN) {
+            for (int i = 0; i < menuOptions.length; i++) {
+                String opt = menuOptions[i];
+                float y = Gdx.graphics.getHeight() - 160 - i * 48;
+
+                boolean disabled = (i == 1 && !hasSavedGame); // Continue disabled if no save
+
+                if (disabled) {
+                    font.setColor(0.5f, 0.5f, 0.5f, 1f);
+                } else if (i == menuIndex) {
+                    font.setColor(1f, 0.9f, 0.2f, 1f);
+                } else {
+                    font.setColor(1f, 1f, 1f, 1f);
+                }
+
+                GlyphLayout gl = new GlyphLayout(font, opt);
+                font.draw(batch, gl, (Gdx.graphics.getWidth() - gl.width) / 2f, y);
+            }
+        } else if (menuView == MenuView.HOWTO) {
+            font.setColor(Color.WHITE);
+            String how = "How to Play:\n- LMB: Flashlight\n- F: Interact\n- Shift: Sprint\n\nPress ESC to return.";
+            GlyphLayout gl = new GlyphLayout(font, how, Color.WHITE, Gdx.graphics.getWidth() - 80, Align.left, true);
+            font.draw(batch, gl, 40, Gdx.graphics.getHeight() - 120);
+        } else if (menuView == MenuView.SETTINGS) {
+            // Render editable settings
+            for (int i = 0; i < settingsOptions.length; i++) {
+                String opt = settingsOptions[i];
+                float y = Gdx.graphics.getHeight() - 160 - i * 48;
+
+                if (i == settingsIndex) font.setColor(1f, 0.9f, 0.2f, 1f); else font.setColor(1f, 1f, 1f, 1f);
+
+                String value;
+                switch (i) {
+                    case 0:
+                        value = String.format("%.1f", masterVolume);
+                        break;
+                    case 1:
+                        value = sfxEnabled ? "On" : "Off";
+                        break;
+                    case 2:
+                        value = fullscreen ? "On" : "Off";
+                        break;
+                    default:
+                        value = "";
+                }
+
+                GlyphLayout gl = new GlyphLayout(font, opt + ": " + value);
+                font.draw(batch, gl, (Gdx.graphics.getWidth() - gl.width) / 2f, y);
+            }
+        }
+
+        batch.end();
+
+        // Draw volume slider when in settings
+        if (menuView == MenuView.SETTINGS) {
+            // Slider geometry (match position used when drawing text above)
+            float sliderW = 300f;
+            float sliderH = 10f;
+            float cx = Gdx.graphics.getWidth() / 2f;
+            float sliderX = cx - sliderW / 2f;
+            float sliderY = Gdx.graphics.getHeight() - 160 - 0 * 48 - 30; // under the first settings line
+
+            shapeRenderer.setProjectionMatrix(hudCamera.combined);
+            shapeRenderer.begin(ShapeRenderer.ShapeType.Filled);
+            // background
+            shapeRenderer.setColor(0.15f, 0.15f, 0.15f, 1f);
+            shapeRenderer.rect(sliderX, sliderY, sliderW, sliderH);
+            // filled portion
+            shapeRenderer.setColor(0.2f, 0.7f, 1f, 1f);
+            shapeRenderer.rect(sliderX, sliderY, sliderW * masterVolume, sliderH);
+            // knob
+            float knobX = sliderX + sliderW * masterVolume;
+            float knobY = sliderY + sliderH / 2f;
+            shapeRenderer.setColor(1f, 1f, 1f, 1f);
+            shapeRenderer.circle(knobX, knobY, 8f);
+            shapeRenderer.end();
+
+            // Handle mouse drag on slider
+            if (Gdx.input.isTouched()) {
+                float mx = Gdx.input.getX();
+                float my = Gdx.input.getY();
+                float yHud = Gdx.graphics.getHeight() - my;
+                if (mx >= sliderX && mx <= sliderX + sliderW && yHud >= sliderY - 20 && yHud <= sliderY + 20) {
+                    float newVal = (mx - sliderX) / sliderW;
+                    newVal = Math.max(0f, Math.min(1f, newVal));
+                    if (Math.abs(newVal - masterVolume) > 0.001f) {
+                        masterVolume = Math.round(newVal * 10f) / 10f; // snap to 0.1 steps
+                        persistSettings();
+                    }
+                }
+            }
+        }
+    }
+
+    private void handleMenuInput() {
+        // Navigation by keyboard
+        if (Gdx.input.isKeyJustPressed(Input.Keys.DOWN)) {
+            if (menuView == MenuView.MAIN) {
+                menuIndex = (menuIndex + 1) % menuOptions.length;
+            } else if (menuView == MenuView.SETTINGS) {
+                settingsIndex = (settingsIndex + 1) % settingsOptions.length;
+            }
+        }
+        if (Gdx.input.isKeyJustPressed(Input.Keys.UP)) {
+            if (menuView == MenuView.MAIN) {
+                menuIndex = (menuIndex - 1 + menuOptions.length) % menuOptions.length;
+            } else if (menuView == MenuView.SETTINGS) {
+                settingsIndex = (settingsIndex - 1 + settingsOptions.length) % settingsOptions.length;
+            }
+        }
+
+        if (Gdx.input.isKeyJustPressed(Input.Keys.ESCAPE)) {
+            if (menuView != MenuView.MAIN) menuView = MenuView.MAIN;
+        }
+
+        // Settings adjustments
+        if (menuView == MenuView.SETTINGS) {
+            if (Gdx.input.isKeyJustPressed(Input.Keys.LEFT)) {
+                switch (settingsIndex) {
+                    case 0: masterVolume = Math.max(0f, Math.round((masterVolume - 0.1f) * 10f) / 10f); break;
+                    case 1: sfxEnabled = !sfxEnabled; break;
+                    case 2: fullscreen = !fullscreen; break;
+                }
+                persistSettings();
+            }
+            if (Gdx.input.isKeyJustPressed(Input.Keys.RIGHT)) {
+                switch (settingsIndex) {
+                    case 0: masterVolume = Math.min(1f, Math.round((masterVolume + 0.1f) * 10f) / 10f); break;
+                    case 1: sfxEnabled = !sfxEnabled; break;
+                    case 2: fullscreen = !fullscreen; break;
+                }
+                persistSettings();
+            }
+        }
+
+        if (Gdx.input.isKeyJustPressed(Input.Keys.ENTER) || Gdx.input.isButtonJustPressed(Input.Buttons.LEFT)) {
+            // If mouse click, determine which option was clicked (simple Y check)
+            if (Gdx.input.isButtonJustPressed(Input.Buttons.LEFT)) {
+                float my = Gdx.input.getY();
+                float y = Gdx.graphics.getHeight() - my;
+                for (int i = 0; i < menuOptions.length; i++) {
+                    float optionY = Gdx.graphics.getHeight() - 160 - i * 48 - 12; // rough center
+                    if (y < optionY + 24 && y > optionY - 24) {
+                        menuIndex = i;
+                        break;
+                    }
+                }
+            }
+
+            if (menuView == MenuView.MAIN) {
+                switch (menuIndex) {
+                    case 0: // Start Game
+                        startGame(false);
+                        prefs.putBoolean("hasSave", true);
+                        prefs.flush();
+                        hasSavedGame = true;
+                        break;
+                    case 1: // Continue
+                        if (hasSavedGame) startGame(true);
+                        break;
+                    case 2: // How to Play
+                        menuView = MenuView.HOWTO;
+                        break;
+                    case 3: // Settings
+                        menuView = MenuView.SETTINGS;
+                        break;
+                    case 4: // Quit
+                        Gdx.app.exit();
+                        break;
+                }
+            } else if (menuView == MenuView.SETTINGS) {
+                // ENTER in settings returns to main menu
+                menuView = MenuView.MAIN;
+            } else if (menuView == MenuView.HOWTO) {
+                // ENTER in HowTo returns to main menu
+                menuView = MenuView.MAIN;
+            }
+        }
+    }
+
+    private void persistSettings() {
+        prefs.putFloat("masterVolume", masterVolume);
+        prefs.putBoolean("sfxEnabled", sfxEnabled);
+        prefs.putBoolean("fullscreen", fullscreen);
+        prefs.flush();
     }
 
     // ======================
